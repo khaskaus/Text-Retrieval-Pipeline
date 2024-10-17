@@ -1,0 +1,48 @@
+cd path/to/your/project
+git init
+git add.
+git commit -m "Initial commit"
+git branch -M main
+git remote add origin https://github.com/your-username/repo-name.git
+git push -u origin main
+from beir import util, LoggingHandler
+from beir.datasets.data_loader import GenericDataLoader
+
+data_path = "path/to/dataset"
+corpus, queries, qrels = GenericDataLoader(data_folder=data_path).load(split="test")
+from sentence_transformers import SentenceTransformer, util
+
+# Load embedding models
+small_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+large_model = SentenceTransformer('nvidia/nv-embedqa-e5-v5')
+
+# Encode query and passages
+query_embedding = small_model.encode("What is multi-stage retrieval?", convert_to_tensor=True)
+passage_embeddings = small_model.encode(list(corpus.values()), convert_to_tensor=True)
+
+# Retrieve top-k candidates using cosine similarity
+top_k = 10
+scores = util.cos_sim(query_embedding, passage_embeddings)[0]
+top_results = scores.topk(k=top_k)
+from transformers import pipeline
+
+# Load ranking models
+small_reranker = pipeline("text-classification", model='cross-encoder/ms-marco-MiniLM-L-12-v2')
+large_reranker = pipeline("text-classification", model='nvidia/nv-rerankqa-mistral-4b-v3')
+
+# Rerank the top-k candidates
+reranked_results = sorted(
+    top_results, 
+    key=lambda x: small_reranker(f"Query: {query} Passage: {corpus[x[0]]}")[0]['score'], 
+    reverse=True
+)
+from beir.metrics import EvaluateRetrieval
+
+# Initialize evaluator
+retriever = EvaluateRetrieval()
+
+# Retrieve and rerank results
+results = {query_id: {doc_id: score for doc_id, score in reranked_results}}
+ndcg, _map, recall, precision = retriever.evaluate(qrels, results, [10])
+
+print(f"NDCG@10: {ndcg['NDCG@10']}")
